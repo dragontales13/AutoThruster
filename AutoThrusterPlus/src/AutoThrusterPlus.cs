@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using UnityEngine;
 using UnityEngine.UI;
 using System.Collections.Generic;
@@ -114,6 +114,16 @@ namespace Dragontales
         private float _hipVelocity = 0f;
         private float _reverseMotionVelocity = 0f;
         private JSONStorableFloat _targetTrackingDampingJSON;
+
+        // Force/torque values to apply in FixedUpdate
+        private float _appliedChestMagnitude;
+        private float _appliedHeadMagnitude;
+        private float _appliedHipMagnitude;
+        private float _appliedReverseMotion;
+        private float _appliedCompressionFactor;
+        private float _appliedPersonVariability;
+        private float _appliedTargetVariability;
+        private float _appliedThrustIntensity;
 
         private bool _isPullingOut = false;
         private bool _isReinserting = false;
@@ -567,7 +577,16 @@ namespace Dragontales
             _previousHeadMagnitude = smoothedHeadMagnitude;
             _previousHipMagnitude = smoothedHipMagnitude;
 
+            // Store smoothed magnitudes for FixedUpdate application
+            _appliedChestMagnitude = smoothedChestMagnitude;
+            _appliedHeadMagnitude = smoothedHeadMagnitude;
+            _appliedHipMagnitude = smoothedHipMagnitude;
+
             float speedFactor = (_cycler.CurrentDuration - _cycleDurationMinJSON.val) / Mathf.Max(_cycleDurationMaxJSON.val - _cycleDurationMinJSON.val, 0.01f); float compressionFactor = 1.0f - ((1.0f - speedFactor) * _distanceCompressionJSON.val);
+            _appliedCompressionFactor = compressionFactor;
+            _appliedPersonVariability = _personMotionVariability;
+            _appliedTargetVariability = _targetMotionVariability;
+
             // Ramp up thrust intensity over time
             if (_speedRampTimer < _speedRampDurationJSON.val)
             {
@@ -578,6 +597,7 @@ namespace Dragontales
             {
                 _thrustIntensity = 1f;
             }
+            _appliedThrustIntensity = _thrustIntensity;
 
             // Update penis position unless frozen
             if (!_freezePenisPositionJSON.val)
@@ -589,54 +609,64 @@ namespace Dragontales
                 _penisBaseCtrl.transform.position = newPenisPos;
             }
 
-            // Don't apply forces when finishing the cycle
-            if (_isFinishingCycle) return;
+            // Calculate target motion with proportional reverse motion on OUT phase
+            float rawReverseMotion = (1f - easedMagnitude) * _outPhaseMotionJSON.val;
+            float reverseMotionAmount = Mathf.SmoothDamp(_previousReverseMotion, rawReverseMotion, ref _reverseMotionVelocity, smoothTime, Mathf.Infinity, Time.deltaTime);
+            _previousReverseMotion = reverseMotionAmount;
+            _appliedReverseMotion = reverseMotionAmount;
+        }
 
+        private void FixedUpdate()
+        {
+            // Apply all forces in FixedUpdate for physics stability
+            if (!_isValid || _isPulledOut || _isFinishingCycle) return;
+            if (!_cycler.IsActive) return;
+
+            // Apply forces to person rigidbodies
             if (_chestRB != null)
             {
                 Vector3 chestForce = new Vector3(0f, _chestForceYJSON.val, _chestForceZJSON.val);
                 Vector3 chestTorque = new Vector3(_chestTorqueXJSON.val, 0f, 0f);
-                _chestRB.AddRelativeForce(chestForce * smoothedChestMagnitude * compressionFactor * _personMotionVariability * _thrustIntensity);
-                _chestRB.AddRelativeTorque(chestTorque * smoothedChestMagnitude * compressionFactor * _personMotionVariability * _thrustIntensity);
+                _chestRB.AddRelativeForce(chestForce * _appliedChestMagnitude * _appliedCompressionFactor * _appliedPersonVariability * _appliedThrustIntensity, ForceMode.Acceleration);
+                _chestRB.AddRelativeTorque(chestTorque * _appliedChestMagnitude * _appliedCompressionFactor * _appliedPersonVariability * _appliedThrustIntensity, ForceMode.Acceleration);
             }
 
             if (_headRB != null)
             {
                 Vector3 headForce = new Vector3(0f, 0f, _headForceZJSON.val);
                 Vector3 headTorque = new Vector3(_headTorqueXJSON.val, 0f, 0f);
-                _headRB.AddRelativeForce(headForce * smoothedHeadMagnitude * compressionFactor * _personMotionVariability * _thrustIntensity);
-                _headRB.AddRelativeTorque(headTorque * smoothedHeadMagnitude * compressionFactor * _personMotionVariability * _thrustIntensity);
+                _headRB.AddRelativeForce(headForce * _appliedHeadMagnitude * _appliedCompressionFactor * _appliedPersonVariability * _appliedThrustIntensity, ForceMode.Acceleration);
+                _headRB.AddRelativeTorque(headTorque * _appliedHeadMagnitude * _appliedCompressionFactor * _appliedPersonVariability * _appliedThrustIntensity, ForceMode.Acceleration);
             }
+
             if (_hipRB != null)
             {
                 Vector3 hipTorque = new Vector3(_hipTorqueXJSON.val, 0f, 0f);
-                _hipRB.AddRelativeTorque(hipTorque * smoothedHipMagnitude * compressionFactor * _personMotionVariability * _thrustIntensity);
+                _hipRB.AddRelativeTorque(hipTorque * _appliedHipMagnitude * _appliedCompressionFactor * _appliedPersonVariability * _appliedThrustIntensity, ForceMode.Acceleration);
             }
 
-            // Calculate target motion with proportional reverse motion on OUT phase
-            float rawReverseMotion = (1f - easedMagnitude) * _outPhaseMotionJSON.val;
-            float reverseMotionAmount = Mathf.SmoothDamp(_previousReverseMotion, rawReverseMotion, ref _reverseMotionVelocity, smoothTime, Mathf.Infinity, Time.deltaTime);
-            _previousReverseMotion = reverseMotionAmount;
-
+            // Apply forces to target rigidbodies
             if (_targetHipRB != null)
             {
-                float hipMotionMultiplier = smoothedHipMagnitude - reverseMotionAmount; Vector3 targetHipForce = new Vector3(0f, _targetHipForceYJSON.val * hipMotionMultiplier, _targetHipForceZJSON.val * hipMotionMultiplier);
+                float hipMotionMultiplier = _appliedHipMagnitude - _appliedReverseMotion;
+                Vector3 targetHipForce = new Vector3(0f, _targetHipForceYJSON.val * hipMotionMultiplier, _targetHipForceZJSON.val * hipMotionMultiplier);
                 Vector3 targetHipTorque = new Vector3(_targetHipTorqueXJSON.val * hipMotionMultiplier, 0f, 0f);
-                _targetHipRB.AddRelativeForce(targetHipForce * compressionFactor * _targetMotionVariability * _thrustIntensity);
-                _targetHipRB.AddRelativeTorque(targetHipTorque * compressionFactor * _targetMotionVariability * _thrustIntensity);
+                _targetHipRB.AddRelativeForce(targetHipForce * _appliedCompressionFactor * _appliedTargetVariability * _appliedThrustIntensity, ForceMode.Acceleration);
+                _targetHipRB.AddRelativeTorque(targetHipTorque * _appliedCompressionFactor * _appliedTargetVariability * _appliedThrustIntensity, ForceMode.Acceleration);
             }
 
             if (_targetChestRB != null)
             {
-                float chestMotionMultiplier = smoothedChestMagnitude - reverseMotionAmount; Vector3 targetChestForce = new Vector3(0f, _targetChestForceYJSON.val * chestMotionMultiplier, _targetChestForceZJSON.val * chestMotionMultiplier);
+                float chestMotionMultiplier = _appliedChestMagnitude - _appliedReverseMotion;
+                Vector3 targetChestForce = new Vector3(0f, _targetChestForceYJSON.val * chestMotionMultiplier, _targetChestForceZJSON.val * chestMotionMultiplier);
                 Vector3 targetChestTorque = new Vector3(_targetChestTorqueXJSON.val * chestMotionMultiplier, 0f, 0f);
-                _targetChestRB.AddRelativeForce(targetChestForce * compressionFactor * _targetMotionVariability * _thrustIntensity);
-                _targetChestRB.AddRelativeTorque(targetChestTorque * compressionFactor * _targetMotionVariability * _thrustIntensity);
+                _targetChestRB.AddRelativeForce(targetChestForce * _appliedCompressionFactor * _appliedTargetVariability * _appliedThrustIntensity, ForceMode.Acceleration);
+                _targetChestRB.AddRelativeTorque(targetChestTorque * _appliedCompressionFactor * _appliedTargetVariability * _appliedThrustIntensity, ForceMode.Acceleration);
             }
 
             if (_targetHeadRB != null)
             {
-                float headMotionMultiplier = smoothedHeadMagnitude - reverseMotionAmount;
+                float headMotionMultiplier = _appliedHeadMagnitude - _appliedReverseMotion;
                 // Get head control for stable local coordinate system
                 FreeControllerV3 targetHeadCtrl = _targetHeadRB.GetComponent<FreeControllerV3>();
 
@@ -645,17 +675,17 @@ namespace Dragontales
                     // Apply forces in control node's local space
                     Vector3 targetHeadForceLocal = new Vector3(0f, _targetHeadForceYJSON.val * headMotionMultiplier, _targetHeadForceZJSON.val * headMotionMultiplier);
                     Vector3 targetHeadForceWorld = targetHeadCtrl.transform.TransformDirection(targetHeadForceLocal);
-                    _targetHeadRB.AddForce(targetHeadForceWorld * compressionFactor * _targetMotionVariability * _thrustIntensity);
+                    _targetHeadRB.AddForce(targetHeadForceWorld * _appliedCompressionFactor * _appliedTargetVariability * _appliedThrustIntensity, ForceMode.Acceleration);
                 }
                 else
                 {
                     // Fallback to rigidbody local
                     Vector3 targetHeadForce = new Vector3(0f, _targetHeadForceYJSON.val * headMotionMultiplier, _targetHeadForceZJSON.val * headMotionMultiplier);
-                    _targetHeadRB.AddRelativeForce(targetHeadForce * compressionFactor * _targetMotionVariability * _thrustIntensity);
+                    _targetHeadRB.AddRelativeForce(targetHeadForce * _appliedCompressionFactor * _appliedTargetVariability * _appliedThrustIntensity, ForceMode.Acceleration);
                 }
 
                 Vector3 targetHeadTorque = new Vector3(_targetHeadTorqueXJSON.val * headMotionMultiplier, 0f, _targetHeadTorqueZJSON.val * headMotionMultiplier);
-                _targetHeadRB.AddRelativeTorque(targetHeadTorque * compressionFactor * _targetMotionVariability * _thrustIntensity);
+                _targetHeadRB.AddRelativeTorque(targetHeadTorque * _appliedCompressionFactor * _appliedTargetVariability * _appliedThrustIntensity, ForceMode.Acceleration);
             }
         }
 
