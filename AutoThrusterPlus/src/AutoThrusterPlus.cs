@@ -577,6 +577,12 @@ namespace Dragontales
             _previousHeadMagnitude = smoothedHeadMagnitude;
             _previousHipMagnitude = smoothedHipMagnitude;
 
+            // Correct amplitude to match pre-smoothing force levels
+            const float bodyAmplitudeCorrection = 0.65f;
+            smoothedChestMagnitude *= bodyAmplitudeCorrection;
+            smoothedHeadMagnitude *= bodyAmplitudeCorrection;
+            smoothedHipMagnitude *= bodyAmplitudeCorrection;
+
             // Store smoothed magnitudes for FixedUpdate application
             _appliedChestMagnitude = smoothedChestMagnitude;
             _appliedHeadMagnitude = smoothedHeadMagnitude;
@@ -613,6 +619,9 @@ namespace Dragontales
             float rawReverseMotion = (1f - easedMagnitude) * _outPhaseMotionJSON.val;
             float reverseMotionAmount = Mathf.SmoothDamp(_previousReverseMotion, rawReverseMotion, ref _reverseMotionVelocity, smoothTime, Mathf.Infinity, Time.deltaTime);
             _previousReverseMotion = reverseMotionAmount;
+
+            // Correct amplitude to match pre-smoothing levels
+            reverseMotionAmount *= bodyAmplitudeCorrection;
             _appliedReverseMotion = reverseMotionAmount;
         }
 
